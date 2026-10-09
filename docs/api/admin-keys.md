@@ -103,7 +103,7 @@ curl -X POST "https://flow.yourdomain.com/api/v1/admin/keys/fme_live_z889/revoke
 
 If an API key is leaked or compromised:
 1. **Identify the compromised key prefix** from your application logs.
-2. Run `fme keys revoke <prefix>` on the VPS or call the `/admin/keys/{prefix}/revoke` endpoint.
+2. Run `fme keys revoke fme_live_xxxx` on the VPS or call the `/admin/keys/fme_live_xxxx/revoke` endpoint.
 3. Verify that requests using the leaked key return `401 Unauthorized`.
-4. Issue a new key: `fme keys create --name "<app_name>-rotated"` and update your application environment.
+4. Issue a new key: `fme keys create --name "my-app-rotated"` and update your application environment.
 5. **No server reboot or Docker container restart is required.**

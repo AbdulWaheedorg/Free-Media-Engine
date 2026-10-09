@@ -200,7 +200,7 @@ cp .env.example .env
 ```
 
 Edit `.env` and set:
-- `FLOW_PROJECT_ID`: The UUID from your Google Flow workspace URL (`flow.google.com/project/<UUID>`).
+- `FLOW_PROJECT_ID`: The UUID from your Google Flow workspace URL (`flow.google.com/project/00000000-0000-0000-0000-000000000000`).
 - `DOMAIN_NAME`: Your domain or VPS IP (e.g., `flow.example.com`).
 - `VNC_PASSWORD`: A secure password for the browser screen.
 

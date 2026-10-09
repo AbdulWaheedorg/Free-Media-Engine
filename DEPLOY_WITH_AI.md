@@ -117,7 +117,7 @@ Ensure both `fme-daemon` and `fme-chromium` show status `Up`.
 > [!IMPORTANT]
 > **AGENT DIRECTIVE**: You cannot enter Google 2FA or passwords for the user. Pause execution and output the exact friendly prompt below to guide your user through the browser login.
 
-### 📢 Copy & Paste This Exact Message to Your User:
+### 📢 Copy & Paste This Exact Message to Your User (Substitute `<your-vps-user>`, `<your-vps-ip>`, and `<YOUR_VNC_PASSWORD>` with the actual values configured in Step 2):
 
 ---
 

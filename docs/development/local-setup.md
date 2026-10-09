@@ -18,8 +18,8 @@ This guide details how to configure a local development environment, run the Fre
 ### 1. Clone the Repository & Create Virtual Environment
 ```bash
 # Clone the repository
-git clone <repository_url>
-cd "AW Photo and Video Generation API"
+git clone https://github.com/AbdulWaheedorg/Free-Media-Engine.git
+cd Free-Media-Engine
 
 # Create a virtual environment
 python -m venv .venv

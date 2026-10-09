@@ -6,10 +6,11 @@ Thank you for your interest in contributing to **Free Media Engine (FME)**! We w
 
 ## 🛠️ Development Workflow
 
-1. **Fork the Repository** on GitHub.
-2. **Clone your fork locally**:
+1. **Fork the Repository** on GitHub: Go to [https://github.com/AbdulWaheedorg/Free-Media-Engine](https://github.com/AbdulWaheedorg/Free-Media-Engine) and click **Fork**.
+2. **Clone your repository locally**:
    ```bash
-   git clone https://github.com/<your-username>/Free-Media-Engine.git
+   # Clone the repository:
+   git clone https://github.com/AbdulWaheedorg/Free-Media-Engine.git
    cd Free-Media-Engine
    ```
 3. **Set up a Virtual Environment**:

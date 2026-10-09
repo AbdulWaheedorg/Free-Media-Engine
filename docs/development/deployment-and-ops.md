@@ -62,7 +62,7 @@ services:
       - "127.0.0.1:6901:6901"
     environment:
       - VNC_PW=vncpassword
-      - APP_ARGS=--user-data-dir=/home/kasm-user/chrome-data https://flow.google.com/project/<FLOW_PROJECT_ID>
+      - APP_ARGS=--user-data-dir=/home/kasm-user/chrome-data https://flow.google.com/project/${FLOW_PROJECT_ID}
     volumes:
       - ./data/chrome-profile:/home/kasm-user/chrome-data
       - ./fme_extension:/usr/share/chromium/extensions/fme_extension:ro
@@ -78,7 +78,7 @@ Port `6901` is strictly bound to `127.0.0.1` and is never exposed to the public 
 
 ### 1. Establish an SSH Port Forward Tunnel
 ```bash
-ssh -N -L 6901:127.0.0.1:6901 <user>@<vps_ip>
+ssh -N -L 6901:127.0.0.1:6901 ubuntu@YOUR_VPS_IP
 ```
 *(If using an SSH key file, include `-i /path/to/key.pem`)*.
 
@@ -87,7 +87,7 @@ Navigate to `https://localhost:6901` in your browser:
 - **Username**: `kasm_user`
 - **Password**: `vncpassword`
 
-Once logged in, open `https://flow.google.com/project/<FLOW_PROJECT_ID>`. The profile will persist indefinitely in `./data/chrome-profile`.
+Once logged in, open `https://flow.google.com/project/${FLOW_PROJECT_ID}`. The profile will persist indefinitely in `./data/chrome-profile`.
 
 ---
 
