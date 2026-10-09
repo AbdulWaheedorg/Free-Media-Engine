@@ -1,0 +1,55 @@
+version: "3.8"
+
+services:
+  fme-daemon:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fme-daemon
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DAEMON_HOST=0.0.0.0
+      - FME_WS_HOST=0.0.0.0
+    ports:
+      - "8120:8120"
+      - "127.0.0.1:9222:9222"
+    volumes:
+      - ${DATA_DIR:-./data}:/data
+      - ./fme_engine:/app/fme_engine
+    networks:
+      - fme-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  fme-chromium:
+    image: kasmweb/chromium:1.16.0
+    container_name: fme-chromium
+    restart: unless-stopped
+    shm_size: "2gb"
+    ports:
+      - "127.0.0.1:6901:6901"
+    environment:
+      - VNC_PW=${VNC_PASSWORD:-ChangeMe_SecurePassword_2026!}
+      - LAUNCH_URL=https://flow.google.com/project/${FLOW_PROJECT_ID}
+      - APP_ARGS=--start-maximized --user-data-dir=/home/kasm-user/chrome-data
+    volumes:
+      - ${DATA_DIR:-./data}/chrome-profile:/home/kasm-user/chrome-data
+      - ./fme_extension:/usr/share/chromium/extensions/fme_extension:ro
+      - ./fme_extension:/home/kasm-user/fme_extension:ro
+    networks:
+      - fme-net
+    depends_on:
+      - fme-daemon
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+networks:
+  fme-net:
+    driver: bridge
