@@ -54,45 +54,41 @@ async def get_media_asset(
             detail="Invalid or revoked API key",
         )
 
-    # 3. Look up job and file path
+    # 3. Look up job and verify record exists
     job = await crud.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    base_dir = Path(settings.OUTPUTS_DIR).resolve()
-    safe_name = Path(job_id).name
+    base_dir = os.path.realpath(settings.OUTPUTS_DIR)
     ext = ".png" if job.get("mode") in ("t2i", "edit_image") else ".mp4"
+    filename = f"{job_id}{ext}"
 
-    resolved_file: Optional[Path] = None
-    raw_local = job.get("local_path")
-    if raw_local:
-        candidate = Path(raw_local).resolve()
-        try:
-            candidate.relative_to(base_dir)
-            if candidate.is_file():
-                resolved_file = candidate
-        except ValueError:
-            pass
+    # Canonical path resolution & containment verification (CWE-022 sanitizer)
+    target_path = os.path.realpath(os.path.join(base_dir, filename))
+    if not target_path.startswith(base_dir + os.sep):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path traversal detected",
+        )
 
-    if not resolved_file:
-        candidate = (base_dir / f"{safe_name}{ext}").resolve()
-        try:
-            candidate.relative_to(base_dir)
-            if candidate.is_file():
-                resolved_file = candidate
-        except ValueError:
-            pass
+    # Check if target exists; fallback to job's verified local_path if set
+    if not os.path.isfile(target_path):
+        raw_local = job.get("local_path")
+        if raw_local:
+            alt_path = os.path.realpath(raw_local)
+            if alt_path.startswith(base_dir + os.sep) and os.path.isfile(alt_path):
+                target_path = alt_path
 
-    if not resolved_file:
+    if not os.path.isfile(target_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Asset file not found on disk. Job may still be processing or failed.",
         )
 
-    media_type = "video/mp4" if resolved_file.suffix == ".mp4" else "image/png"
+    media_type = "video/mp4" if target_path.endswith(".mp4") else "image/png"
     return FileResponse(
-        path=str(resolved_file),
+        path=target_path,
         media_type=media_type,
-        filename=resolved_file.name,
+        filename=os.path.basename(target_path),
         headers={"Accept-Ranges": "bytes"},
     )
