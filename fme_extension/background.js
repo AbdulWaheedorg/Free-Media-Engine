@@ -850,211 +850,27 @@ async function handleBatchRpc(msg) {
   setState('idle');
 }
 
-// ─── API Request Proxy ──────────────────────────────────────
+// ─── Deprecated Legacy Request Handlers (Decommissioned Upstream) ──────────
+// All modern Google Flow operations execute strictly through page-context
+// batch_rpc (runBatchRpc). Direct HTTP proxies (trpc_request / api_request)
+// are decommissioned upstream and disabled to eliminate SSRF attack vectors.
 
 async function handleTrpcRequest(msg) {
-  const { id, params } = msg;
-  const { url, method = 'POST', headers = {}, body, responseMode = 'json' } = params;
-
-  if (!url || typeof url !== 'string') {
-    sendToAgent({ id, error: 'INVALID_TRPC_URL' });
-    return;
-  }
-
-  let targetUrl;
-  try {
-    targetUrl = new URL(url);
-  } catch {
-    sendToAgent({ id, error: 'INVALID_TRPC_URL' });
-    return;
-  }
-
-  const ALLOWED_TRPC_HOSTS = new Set([
-    'labs.google',
-    'flow.google.com',
-    'aisandbox-pa.googleapis.com',
-  ]);
-
-  if (targetUrl.protocol !== 'https:' || !ALLOWED_TRPC_HOSTS.has(targetUrl.hostname)) {
-    sendToAgent({ id, error: 'INVALID_TRPC_URL' });
-    return;
-  }
-
-  setState('running');
-  // TRPC calls don't consume captcha — don't count in metrics
-
-  const logId = id;
-  const logType = targetUrl.pathname.includes('createProject') ? 'CREATE_PROJECT' : 'TRPC';
-  // TRPC calls are silent — don't show in request log
-
-  const fetchHeaders = { 'Content-Type': 'application/json', ...headers };
-  if (flowKey) {
-    fetchHeaders['authorization'] = `Bearer ${flowKey}`;
-  }
-
-  try {
-    const resp = await fetch(targetUrl.href, {
-      method,
-      headers: fetchHeaders,
-      body: body ? JSON.stringify(body) : undefined,
-      credentials: 'include',
-    });
-    let data;
-    if (responseMode === 'url') {
-      // fetch() has already followed the authenticated Flow redirect. Return
-      // only the final signed URL and cancel the body so large videos are not
-      // buffered in the extension or copied through the WebSocket bridge.
-      data = {
-        url: resp.url,
-        contentType: resp.headers.get('content-type'),
-      };
-      await resp.body?.cancel();
-    } else {
-      data = await resp.json();
-    }
-    chrome.storage.local.set({ metrics });
-    updateRequestLog(logId, { status: 'success' });
-    sendToAgent({ id, status: resp.status, data });
-  } catch (e) {
-    console.error('[FMEBridge] tRPC request failed:', e);
-    chrome.storage.local.set({ metrics });
-    updateRequestLog(logId, { status: 'failed', error: e.message || 'TRPC_FETCH_FAILED' });
-    sendToAgent({ id, error: e.message || 'TRPC_FETCH_FAILED' });
-  } finally {
-    setState('idle');
-  }
+  const { id } = msg;
+  sendToAgent({
+    id,
+    status: 410,
+    error: 'DEPRECATED_ENDPOINT: Direct tRPC calls have been decommissioned by Google Flow upstream. Use batch_rpc.',
+  });
 }
 
-// Legacy REST proxy against aisandbox-pa. No current agent sends `api_request`;
-// kept only so an extension updated ahead of its agent still serves an older
-// one. It needs a `Bearer ya29.…` that Flow stopped minting, so it 401s on any
-// post-migration profile — as does sendTelemetry below, which early-returns
-// without a flowKey. Nothing here reaches aisandbox-pa any more; when the
-// oldest agent in the wild speaks batch_rpc, this and the host permission go.
 async function handleApiRequest(msg) {
-  const { id, params } = msg;
-  const { url, method, headers, body, captchaAction } = params;
-
-  if (!url || typeof url !== 'string') {
-    sendToAgent({ id, error: 'MISSING_URL' });
-    return;
-  }
-
-  let targetUrl;
-  try {
-    targetUrl = new URL(url);
-  } catch {
-    sendToAgent({ id, error: 'INVALID_URL' });
-    return;
-  }
-
-  if (targetUrl.protocol !== 'https:' || targetUrl.hostname !== 'aisandbox-pa.googleapis.com') {
-    sendToAgent({ id, error: 'INVALID_URL' });
-    return;
-  }
-
-  setState('running');
-  const hasCaptcha = !!captchaAction;
-  if (hasCaptcha) metrics.requestCount++;
-
-  const logId = id;
-  const logType = _classifyApiUrl(targetUrl.href);
-  if (_VISIBLE_TYPES.has(logType)) {
-    const payloadSummary = body ? JSON.stringify(body).slice(0, 200) : null;
-    addRequestLog({ id: logId, type: logType, time: new Date().toISOString(), status: 'processing', error: null, outputUrl: null, url: targetUrl.href, payloadSummary });
-  }
-
-  try {
-    // Step 1: Solve captcha if needed
-    let captchaToken = null;
-    if (captchaAction) {
-      const captchaResult = await solveCaptcha(id, captchaAction);
-      captchaToken = captchaResult?.token || null;
-      if (!captchaToken) {
-        // Cannot proceed without captcha — API will 403
-        const err = captchaResult?.error || 'CAPTCHA_FAILED';
-        console.error(`[FMEBridge] Captcha failed for ${captchaAction}: ${err}`);
-        sendToAgent({ id, status: 403, error: `CAPTCHA_FAILED: ${err}` });
-        if (hasCaptcha) { metrics.failedCount++; metrics.lastError = `CAPTCHA_FAILED: ${err}`; }
-        chrome.storage.local.set({ metrics });
-        updateRequestLog(logId, { status: 'failed', error: `CAPTCHA_FAILED: ${err}` });
-        setState('idle');
-        return;
-      }
-    }
-
-    // Step 2: Inject captcha token into body
-    let finalBody = body;
-    if (captchaToken && finalBody) {
-      finalBody = JSON.parse(JSON.stringify(finalBody)); // deep clone
-      if (finalBody.clientContext?.recaptchaContext) {
-        finalBody.clientContext.recaptchaContext.token = captchaToken;
-      }
-      if (finalBody.requests && Array.isArray(finalBody.requests)) {
-        for (const req of finalBody.requests) {
-          if (req.clientContext?.recaptchaContext) {
-            req.clientContext.recaptchaContext.token = captchaToken;
-          }
-        }
-      }
-    }
-
-    // Step 3: Use flowKey for auth
-    const activeFlowKey = flowKey;
-    if (!activeFlowKey) {
-      sendToAgent({ id, status: 503, error: 'NO_FLOW_KEY' });
-      if (hasCaptcha) { metrics.failedCount++; metrics.lastError = 'NO_FLOW_KEY'; }
-      chrome.storage.local.set({ metrics });
-      updateRequestLog(logId, { status: 'failed', error: 'NO_FLOW_KEY' });
-      setState('idle');
-      return;
-    }
-
-    const fetchHeaders = { ...(headers || {}) };
-    fetchHeaders['authorization'] = `Bearer ${activeFlowKey}`;
-
-    // Step 4: Make the API call from browser context
-    const response = await fetch(targetUrl.href, {
-      method: method || 'POST',
-      headers: fetchHeaders,
-      credentials: 'include',
-      body: method === 'GET' ? undefined : JSON.stringify(finalBody),
-    });
-
-    let responseData;
-    const responseText = await response.text();
-    try {
-      responseData = JSON.parse(responseText);
-    } catch {
-      responseData = responseText;
-    }
-
-    sendToAgent({
-      id,
-      status: response.status,
-      data: responseData,
-    });
-
-    const responseSummary = responseText ? responseText.slice(0, 300) : null;
-    if (response.ok) {
-      if (hasCaptcha) { metrics.successCount++; metrics.lastError = null; }
-      updateRequestLog(logId, { status: 'success', httpStatus: response.status, responseSummary });
-    } else {
-      if (hasCaptcha) { metrics.failedCount++; metrics.lastError = `API_${response.status}`; }
-      updateRequestLog(logId, { status: 'failed', error: `API_${response.status}`, httpStatus: response.status, responseSummary });
-    }
-  } catch (e) {
-    sendToAgent({
-      id,
-      status: 500,
-      error: e.message || 'API_REQUEST_FAILED',
-    });
-    if (hasCaptcha) { metrics.failedCount++; metrics.lastError = e.message; }
-    updateRequestLog(logId, { status: 'failed', error: e.message || 'API_REQUEST_FAILED' });
-  }
-
-  chrome.storage.local.set({ metrics });
-  setState('idle');
+  const { id } = msg;
+  sendToAgent({
+    id,
+    status: 410,
+    error: 'DEPRECATED_ENDPOINT: Legacy aisandbox-pa REST API has been decommissioned by Google Flow upstream. Use batch_rpc.',
+  });
 }
 
 // ─── State & Popup ──────────────────────────────────────────
