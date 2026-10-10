@@ -18,6 +18,9 @@ from fme_engine.db.crud import get_api_key_by_hash, touch_api_key
 _security_scheme = HTTPBearer(auto_error=False)
 
 
+KEY_SALT = b"fme_api_key_salt_v1"
+
+
 def generate_api_key(prefix: Optional[str] = None) -> Tuple[str, str, str]:
     """
     Generate a new high-entropy API key.
@@ -35,8 +38,13 @@ def generate_api_key(prefix: Optional[str] = None) -> Tuple[str, str, str]:
 
 
 def hash_api_key(raw_key: str) -> str:
-    """Compute SHA-256 hex digest of raw key."""
-    return hashlib.sha256(raw_key.strip().encode("utf-8")).hexdigest()
+    """Compute PBKDF2-HMAC-SHA256 hex digest of raw key with 100,000 iterations."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        raw_key.strip().encode("utf-8"),
+        KEY_SALT,
+        iterations=100000,
+    ).hex()
 
 
 def verify_hash_constant_time(candidate_hash: str, target_hash: str) -> bool:

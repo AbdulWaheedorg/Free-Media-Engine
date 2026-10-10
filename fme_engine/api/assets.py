@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query, status
@@ -12,6 +13,8 @@ from fme_engine.core.config import settings
 from fme_engine.db import crud
 
 router = APIRouter(tags=["Assets"])
+
+SAFE_JOB_ID_REGEX = re.compile(r"^[0-9a-fA-F\-]{8,64}$")
 
 
 @router.get(
@@ -24,7 +27,14 @@ async def get_media_asset(
     token: Optional[str] = Query(None, description="API Key token passed in query parameter for browser <video> tags"),
     authorization: Optional[str] = Header(None, description="Standard Authorization: Bearer <API_KEY> header"),
 ):
-    # 1. Resolve and verify authentication token
+    # 1. Strictly sanitize job_id to prevent path injection
+    if not SAFE_JOB_ID_REGEX.fullmatch(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid job ID format. Must be a valid UUID.",
+        )
+
+    # 2. Resolve and verify authentication token
     auth_token = None
     if authorization and authorization.lower().startswith("bearer "):
         auth_token = authorization[7:].strip()
@@ -44,28 +54,45 @@ async def get_media_asset(
             detail="Invalid or revoked API key",
         )
 
-    # 2. Look up job and file path
+    # 3. Look up job and file path
     job = await crud.get_job(job_id)
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    local_path = job.get("local_path")
-    if not local_path or not os.path.exists(local_path):
-        # Check standard default path
-        ext = ".png" if job.get("mode") in ("t2i", "edit_image") else ".mp4"
-        candidate = Path(settings.OUTPUTS_DIR) / f"{job_id}{ext}"
-        if candidate.exists():
-            local_path = str(candidate)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Asset file not found on disk. Job may still be processing or failed.",
-            )
+    base_dir = Path(settings.OUTPUTS_DIR).resolve()
+    safe_name = Path(job_id).name
+    ext = ".png" if job.get("mode") in ("t2i", "edit_image") else ".mp4"
 
-    media_type = "video/mp4" if local_path.endswith(".mp4") else "image/png"
+    resolved_file: Optional[Path] = None
+    raw_local = job.get("local_path")
+    if raw_local:
+        candidate = Path(raw_local).resolve()
+        try:
+            candidate.relative_to(base_dir)
+            if candidate.is_file():
+                resolved_file = candidate
+        except ValueError:
+            pass
+
+    if not resolved_file:
+        candidate = (base_dir / f"{safe_name}{ext}").resolve()
+        try:
+            candidate.relative_to(base_dir)
+            if candidate.is_file():
+                resolved_file = candidate
+        except ValueError:
+            pass
+
+    if not resolved_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Asset file not found on disk. Job may still be processing or failed.",
+        )
+
+    media_type = "video/mp4" if resolved_file.suffix == ".mp4" else "image/png"
     return FileResponse(
-        path=local_path,
+        path=str(resolved_file),
         media_type=media_type,
-        filename=os.path.basename(local_path),
+        filename=resolved_file.name,
         headers={"Accept-Ranges": "bytes"},
     )

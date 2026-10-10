@@ -856,7 +856,26 @@ async function handleTrpcRequest(msg) {
   const { id, params } = msg;
   const { url, method = 'POST', headers = {}, body, responseMode = 'json' } = params;
 
-  if (!url || !url.startsWith('https://labs.google/')) {
+  if (!url || typeof url !== 'string') {
+    sendToAgent({ id, error: 'INVALID_TRPC_URL' });
+    return;
+  }
+
+  let targetUrl;
+  try {
+    targetUrl = new URL(url);
+  } catch {
+    sendToAgent({ id, error: 'INVALID_TRPC_URL' });
+    return;
+  }
+
+  const ALLOWED_TRPC_HOSTS = new Set([
+    'labs.google',
+    'flow.google.com',
+    'aisandbox-pa.googleapis.com',
+  ]);
+
+  if (targetUrl.protocol !== 'https:' || !ALLOWED_TRPC_HOSTS.has(targetUrl.hostname)) {
     sendToAgent({ id, error: 'INVALID_TRPC_URL' });
     return;
   }
@@ -865,7 +884,7 @@ async function handleTrpcRequest(msg) {
   // TRPC calls don't consume captcha — don't count in metrics
 
   const logId = id;
-  const logType = url.includes('createProject') ? 'CREATE_PROJECT' : 'TRPC';
+  const logType = targetUrl.pathname.includes('createProject') ? 'CREATE_PROJECT' : 'TRPC';
   // TRPC calls are silent — don't show in request log
 
   const fetchHeaders = { 'Content-Type': 'application/json', ...headers };
@@ -874,7 +893,7 @@ async function handleTrpcRequest(msg) {
   }
 
   try {
-    const resp = await fetch(url, {
+    const resp = await fetch(targetUrl.href, {
       method,
       headers: fetchHeaders,
       body: body ? JSON.stringify(body) : undefined,
@@ -916,12 +935,20 @@ async function handleApiRequest(msg) {
   const { id, params } = msg;
   const { url, method, headers, body, captchaAction } = params;
 
-  if (!url) {
+  if (!url || typeof url !== 'string') {
     sendToAgent({ id, error: 'MISSING_URL' });
     return;
   }
 
-  if (!url.startsWith('https://aisandbox-pa.googleapis.com/')) {
+  let targetUrl;
+  try {
+    targetUrl = new URL(url);
+  } catch {
+    sendToAgent({ id, error: 'INVALID_URL' });
+    return;
+  }
+
+  if (targetUrl.protocol !== 'https:' || targetUrl.hostname !== 'aisandbox-pa.googleapis.com') {
     sendToAgent({ id, error: 'INVALID_URL' });
     return;
   }
@@ -931,10 +958,10 @@ async function handleApiRequest(msg) {
   if (hasCaptcha) metrics.requestCount++;
 
   const logId = id;
-  const logType = _classifyApiUrl(url);
+  const logType = _classifyApiUrl(targetUrl.href);
   if (_VISIBLE_TYPES.has(logType)) {
     const payloadSummary = body ? JSON.stringify(body).slice(0, 200) : null;
-    addRequestLog({ id: logId, type: logType, time: new Date().toISOString(), status: 'processing', error: null, outputUrl: null, url, payloadSummary });
+    addRequestLog({ id: logId, type: logType, time: new Date().toISOString(), status: 'processing', error: null, outputUrl: null, url: targetUrl.href, payloadSummary });
   }
 
   try {
@@ -987,7 +1014,7 @@ async function handleApiRequest(msg) {
     fetchHeaders['authorization'] = `Bearer ${activeFlowKey}`;
 
     // Step 4: Make the API call from browser context
-    const response = await fetch(url, {
+    const response = await fetch(targetUrl.href, {
       method: method || 'POST',
       headers: fetchHeaders,
       credentials: 'include',

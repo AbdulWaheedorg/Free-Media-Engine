@@ -6,10 +6,13 @@ direct media offloading, and outbound webhook callbacks.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import random
+import re
 import time
 from typing import Any, Dict, Optional
+import httpx
 
 from fme_engine.core.config import settings
 from fme_engine.db import crud
@@ -20,6 +23,38 @@ from fme_engine.services.flow_client import get_flow_client
 from fme_engine.services.webhook import dispatch_webhook
 
 logger = logging.getLogger(__name__)
+
+UUID_REGEX = re.compile(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+
+
+async def resolve_media_id(client, val: Optional[str], project_id: str) -> Optional[str]:
+    """Resolve an image URL or media ID to an active Google Flow project media_id."""
+    if not val:
+        return None
+    val = str(val).strip()
+    if UUID_REGEX.fullmatch(val):
+        return val
+    if "flow-content.google" in val or "flow.google" in val or "/assets/" in val:
+        match = UUID_REGEX.search(val)
+        if match:
+            return match.group(0)
+    if val.startswith("http://") or val.startswith("https://"):
+        try:
+            logger.info(f"[Queue Worker] Ingesting external image into Flow project: {val[:60]}...")
+            async with httpx.AsyncClient(timeout=30.0) as http_client:
+                r = await http_client.get(val)
+                if r.status_code == 200:
+                    b64 = base64.b64encode(r.content).decode("utf-8")
+                    ctype = r.headers.get("content-type", "image/jpeg").split(";")[0]
+                    up_res = await client.upload_image(b64, mime_type=ctype, project_id=project_id)
+                    if up_res.get("status") == 200:
+                        media_id = up_res.get("_mediaId") or up_res.get("data", {}).get("media", {}).get("name")
+                        if media_id:
+                            logger.info(f"[Queue Worker] Ingested image as media_id: {media_id}")
+                            return media_id
+        except Exception as exc:
+            logger.warning(f"[Queue Worker] Could not ingest image {val}: {exc}")
+    return val
 
 
 def map_aspect_ratio(aspect: str, is_video: bool) -> str:
@@ -130,10 +165,12 @@ class QueueWorker:
                             duration_s=duration,
                             seed=job.get("seed"),
                         )
-                    elif mode == "i2v" and job.get("last_frame_image_url"):
+                    elif mode == "i2v" and (job.get("last_frame_image_url") or job.get("last_image_url")):
+                        start_mid = await resolve_media_id(client, job.get("seed_image_url"), settings.FLOW_PROJECT_ID)
+                        end_mid = await resolve_media_id(client, job.get("last_frame_image_url") or job.get("last_image_url"), settings.FLOW_PROJECT_ID)
                         gen_res = await omni_flash.generate_omni_flash_first_last_video(
-                            start_image_media_id=job["seed_image_url"],
-                            end_image_media_id=job["last_frame_image_url"],
+                            start_image_media_id=start_mid or "",
+                            end_image_media_id=end_mid or "",
                             prompt=prompt,
                             project_id=settings.FLOW_PROJECT_ID,
                             aspect_ratio=aspect_rpc,
@@ -141,8 +178,13 @@ class QueueWorker:
                             seed=job.get("seed"),
                         )
                     elif mode == "references" and job.get("reference_image_urls"):
+                        ref_mids = []
+                        for ref_url in job["reference_image_urls"]:
+                            mid = await resolve_media_id(client, ref_url, settings.FLOW_PROJECT_ID)
+                            if mid:
+                                ref_mids.append(mid)
                         gen_res = await omni_flash.generate_omni_flash_video(
-                            reference_media_ids=job["reference_image_urls"],
+                            reference_media_ids=ref_mids,
                             prompt=prompt,
                             project_id=settings.FLOW_PROJECT_ID,
                             aspect_ratio=aspect_rpc,
@@ -150,8 +192,9 @@ class QueueWorker:
                             seed=job.get("seed"),
                         )
                     else:
+                        start_mid = await resolve_media_id(client, job.get("seed_image_url"), settings.FLOW_PROJECT_ID)
                         gen_res = await omni_flash.generate_omni_flash_first_frame_video(
-                            start_image_media_id=job.get("seed_image_url") or "",
+                            start_image_media_id=start_mid or "",
                             prompt=prompt,
                             project_id=settings.FLOW_PROJECT_ID,
                             aspect_ratio=aspect_rpc,
@@ -319,8 +362,14 @@ class QueueWorker:
                 ops_data = status_res.get("data", {}).get("operations", [])
                 for op in ops_data:
                     op_status = op.get("status")
-                    if op_status == "MEDIA_GENERATION_STATUS_SUCCESSFUL" or op.get("videoUrl"):
-                        return op.get("videoUrl"), None
+                    vid_url = (
+                        op.get("videoUrl")
+                        or op.get("operation", {}).get("metadata", {}).get("video", {}).get("fifeUrl")
+                        or op.get("metadata", {}).get("video", {}).get("fifeUrl")
+                        or op.get("fifeUrl")
+                    )
+                    if (op_status == "MEDIA_GENERATION_STATUS_SUCCESSFUL" and vid_url) or vid_url:
+                        return vid_url, None
                     if op_status in ("MEDIA_GENERATION_STATUS_FAILED", "FAILED"):
                         return None, op.get("error") or "Upstream generation failed"
 
